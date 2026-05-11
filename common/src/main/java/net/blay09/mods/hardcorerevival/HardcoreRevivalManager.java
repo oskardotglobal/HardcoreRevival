@@ -1,5 +1,6 @@
 package net.blay09.mods.hardcorerevival;
 
+import it.unimi.dsi.fastutil.Pair;
 import net.blay09.mods.balm.api.Balm;
 import net.blay09.mods.hardcorerevival.api.PlayerKnockedOutEvent;
 import net.blay09.mods.hardcorerevival.api.PlayerRescuedEvent;
@@ -12,11 +13,15 @@ import net.blay09.mods.hardcorerevival.mixin.ServerPlayerAccessor;
 import net.blay09.mods.hardcorerevival.network.RevivalProgressMessage;
 import net.blay09.mods.hardcorerevival.network.RevivalSuccessMessage;
 import net.blay09.mods.hardcorerevival.stats.ModStats;
+import net.minecraft.commands.CommandSource;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageType;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -24,12 +29,19 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.Team;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Optional;
+
+import static net.blay09.mods.hardcorerevival.HardcoreRevival.MOD_ID;
+
 public class HardcoreRevivalManager {
     public static final ResourceKey<DamageType> NOT_RESCUED_IN_TIME = ResourceKey.create(Registries.DAMAGE_TYPE,
-            ResourceLocation.fromNamespaceAndPath(HardcoreRevival.MOD_ID, "not_rescued_in_time"));
+        ResourceLocation.fromNamespaceAndPath(MOD_ID, "not_rescued_in_time"));
 
     public static void knockout(Player player, DamageSource source) {
         if (PlayerHardcoreRevivalManager.isKnockedOut(player)) {
@@ -173,11 +185,67 @@ public class HardcoreRevivalManager {
             accessor.setSpawnInvulnerableTime(0);
         }
 
+        if (HardcoreRevivalConfig.getActive().enableSoftban) {
+            if (player instanceof ServerPlayer serverPlayer) {
+                handleSoftban(serverPlayer);
+            } else {
+                HardcoreRevival.logger.warn("Could not determine spawn location for player, not teleporting...");
+            }
+
+            return;
+        }
+
         final var damageTypes = player.level().registryAccess().registryOrThrow(Registries.DAMAGE_TYPE);
         final var damageSource = new DamageSource(damageTypes.getHolderOrThrow(NOT_RESCUED_IN_TIME));
         PlayerHardcoreRevivalManager.setLastKnockoutTicksPassed(player, 0);
         reset(player);
         player.hurt(damageSource, Float.MAX_VALUE);
+    }
+
+    private static void handleSoftban(ServerPlayer player) {
+        if (player.getServer() == null)
+            return;
+
+        var server = player.getServer();
+
+        var level = Optional.ofNullable(server.getLevel(player.getRespawnDimension()))
+            .or(() -> Optional.ofNullable(server.getLevel(Level.OVERWORLD)))
+            // Overworld should always exist
+            .orElseThrow();
+        var pos = Optional.ofNullable(player.getRespawnPosition())
+            .orElse(level.getSharedSpawnPos());
+
+        player.getInventory().dropAll();
+        player.getInventory().clearContent();
+
+        HardcoreRevivalManager.wakeup(player, true);
+
+        player.teleportTo(
+            level,
+            pos.getX(),
+            pos.getY(),
+            pos.getZ(),
+            0.0f,
+            0.0f
+        );
+
+        player.getServer().getCommands().performPrefixedCommand(
+            new CommandSourceStack(
+                CommandSource.NULL,
+                Vec3.ZERO,
+                Vec2.ZERO,
+                level,
+                4,
+                MOD_ID,
+                Component.literal(MOD_ID),
+                player.getServer(),
+                null
+            ),
+
+            HardcoreRevivalConfig.getActive()
+                .softbanCommandTemplate
+                .replace("%s", player.getGameProfile().getName())
+        );
     }
 
     public static void reset(Player player) {

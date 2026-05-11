@@ -80,4 +80,12 @@ public class HardcoreRevivalConfigData implements BalmConfigData {
     @Comment("The source entity types that kill a player instantly, without a K.O. period.")
     @ExpectedType(ResourceLocation.class)
     public Set<ResourceLocation> instantDeathEntityTypes = Set.of();
+
+    @Comment("Whether to ban players on death for a time instead of permanent death")
+    @Synced
+    public boolean enableSoftban = false;
+
+    @Comment("What command to run, with a %s where the player name should go. A tempban command is not shipped by default, install one. You can also use /ban for permaban.")
+    @Synced
+    public String softbanCommandTemplate = "/mytempban %s 12h You died";
 }
